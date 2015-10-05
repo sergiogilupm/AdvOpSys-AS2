@@ -235,10 +235,12 @@ void *connection_handler(void *socket_desc)
 		if (insertValue(key, message) < 0)
 		{
 			printf("*Error registering new key");
+			// return false
 		}
 		else
 		{
 			printf("New key %s has been registered\n", key);
+			// return true
 		}
 	}
 
@@ -249,6 +251,7 @@ void *connection_handler(void *socket_desc)
 		if (strlen(res) == 0)
 		{
 			printf("*Error obtaining key");
+			// return null
 		}
 		else
 		{
@@ -263,10 +266,12 @@ void *connection_handler(void *socket_desc)
 		if (deleteKey(key) < 0)
 		{
 			printf("*Error deleting key %s\n", key);
+			// return false boolean
 		}
 		else
 		{
 			printf("Key %s has been deleted\n", key);
+			// return true boolean
 		}
 	}
 
@@ -423,7 +428,7 @@ int main(int argc , char *argv[])
 
 	printf("\t+Setting up...");
 	pthread_t incoming_connections_thread;
-	if( pthread_create( &incoming_connections_thread , NULL ,  incoming_connections_handler , NULL ) < 0)
+	if ( pthread_create (&incoming_connections_thread, NULL, incoming_connections_handler, NULL) < 0)
 	{
 		printf ("ERROR\n");
 		perror("*Error when creating listening thread");
