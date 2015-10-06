@@ -1,7 +1,7 @@
 /*
 * File: server.c
 * Author: Sergio Gil Luque
-* Version: 1.0
+* Version: 1.1
 * Date: 10-03-15
 */
 
@@ -17,6 +17,10 @@
 #include "jsmn.h"   // For pasring json files (The config file)
 
 #define PORT 5000
+
+char *configFile = "./configFile.txt";
+int port = 0;
+char *ip;
 
 //char *port = "0000";
 
@@ -58,8 +62,8 @@ char *getValue (char* key) { /* TODO: HANDLE ERRORS. RETURNS VALUE FROM KEY, OTH
 int insertValue (char* key, char* value) /* TODO: Handle errors */
 {
 	struct keyStruct *newValue = malloc (sizeof (struct keyStruct));
-	strncpy(newValue -> key, key, sizeof(key));
-	strncpy(newValue -> value, value, sizeof(value));
+	strncpy(newValue -> key, key, strlen(key));
+	strncpy(newValue -> value, value, strlen(value));
 	HASH_ADD_STR(registeredKeys, key, newValue);
 
 	return 0;
@@ -257,8 +261,8 @@ void *connection_handler(void *socket_desc)
 		{
 			/* Create the reply that will be sent back to the peer */
 			strncpy("OK  ", serverReply, 4);
-			strncpy(res, &serverReply[24], sizeof(res)); /* We skip the key part of the message */
-			write(sock, serverReply, sizeof(serverReply));
+			strncpy(res, &serverReply[24], strlen(res)); /* We skip the key part of the message */
+			write(sock, serverReply, strlen(serverReply));
 		}
 	}
 	else if (strcmp(header,"DEL")==0) /* TODO */
@@ -396,25 +400,102 @@ void *incoming_connections_handler (void* data)
 }
 
 
-int readConfigFile (char* configFilePath)
+int loadConfigFile (char* configFilePath, int configNumber)
 {
 	/* TODO */
 
+	/* Open file */
+
+	FILE *fp;
+	fp = fopen(configFilePath, "r");
+	char line[512];
+	int found = 0;
+	//int bytes_read;
+	char *var;
+	char *servers;
+	char *server;
+	char *auxIP;
+	int auxPort;
+	int i;
+
+    	if (fp != NULL)
+    	{
+		printf ("File %s opened\n", configFilePath);
+
+		while (!found)
+		{
+			if (fgets (line, sizeof(line), fp))
+			{
+				var = strtok(line, "=");
+				if (strcmp(var, "SERVER_INFO") == 0)
+				{
+					found = 1;
+					strtok(NULL, "[");
+					servers = strtok(NULL, "]");
+
+					for (i = 1; i < configNumber; i++)
+					{
+						strtok(NULL, ",");
+					}
+					
+					if ( i == 8)
+					{
+						server = strtok(NULL, "]");
+					}
+					else
+					{
+						server = strtok(NULL, ",");
+					}
+					auxIP = strtok(server,":");
+					auxPort = atoi(strtok(NULL,":"));
+
+					ip = auxIP;
+					port = auxPort;
+				}
+			}
+			else
+			{
+				fclose (fp);
+				return -1;
+			}
+		}
+		
+		fclose(fp);
+	}
+
+	else
+	{
+		printf("ERROR\n");
+		perror("*Error when opening configuration file");
+		return -1;
+	}
+		
+		/*Read file and parse it */
+
+		/* Server info --> Set up with your option */
+
 	return 0;
 }
+
 
 int main(int argc , char *argv[])
 {
 	int res = 0;
 	char *configFile = "test";
 
+	if (argc != 3)
+	{
+		printf("Usage: %s CONFIG_FILE_PATH CONF_OPTION\n", argv[0]);
+		return 0;
+	}
 
 	/* INITIALIZATION */
-	printf("Initializing server...\n");
+	printf("Initializing server... \n");
 	printf("\t+Accessing config file... ");
+	int configNumber = atoi(argv[2]);
 
-	// Accessing configuration file
-	res = readConfigFile(configFile);
+	// Accessing configuration file and loading internal values
+	res = loadConfigFile(configFile, configNumber);
 	if (res == 0)
 	{
 		printf ("OK\n");
