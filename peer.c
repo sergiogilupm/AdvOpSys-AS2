@@ -1,8 +1,8 @@
 /*
 * File: peer.c
 * Author: Sergio Gil Luque
-* Version: 1.1
-* Date: 10-05-15
+* Version: 1.5
+* Date: 10-15-15
 */
 
 #include<stdlib.h>
@@ -14,21 +14,20 @@
 #include<fcntl.h> 
 #include<unistd.h> 
 #include<pthread.h>
+#include <string.h>
 
 #include "uthash.h" // For Hashtable implementation
 
-#define SERVER_PORT 5000 //To remove
+#define MAX_SERVERS 8
 
 /* Prototypes */
-/*int sendFile (int sock, char* fileName);
-int obtainFile (int port, char* fileName);
-void showPromptMessage (int option);*/
+int selectOption(int option, char* key);
 
 /* Global variables */
 int port = 0;
 int testingMode = 0;
 int seqRuns = 1;
-
+int globalOpt = 0;
 
 /* Hash table struct */
 
@@ -39,21 +38,67 @@ typedef struct keyStruct {
 } keyStruct_t;
 
 
-keyStruct_t *registeredValues = NULL;
+int serverSockets[MAX_SERVERS];
 
+keyStruct_t *registeredValues = NULL;
+keyStruct_t *registeredServers = NULL;
+
+
+void printLocalKeys() 
+{
+	struct keyStruct *s;
+	printf("The keys that the peer has registered locally are below. Blank if there are no keys\n");
+	for(s=registeredValues; s != NULL; s=(struct keyStruct*)(s->hh.next)) 
+	{
+        	printf("*Key %s* \nValue: %s\n", s->key, s->value);
+	}
+	printf("\n\n**End of local key registry\n");
+}
+
+
+/* This is just for debugging purposes */
+void printServers() 
+{
+	struct keyStruct *s;
+	printf("The keys that the peer has registered locally are below. Blank if there are no keys\n");
+	for(s=registeredServers; s != NULL; s=(struct keyStruct*)(s->hh.next)) 
+	{
+        	printf("*Key %s* \nValue: %s\n", s->key, s->value);
+	}
+	printf("\n\n**End of local key registry\n");
+}
+
+
+/* Look for server info in the hashtable */
+char *getServer (char* index) { 
+    	struct keyStruct *s;
+    	HASH_FIND_STR (registeredServers, index, s );  
+	return s->value;
+}
+
+/* Insert server in hash table. Only when setting up */
+int insertServer (char* key, char* value) 
+{
+	struct keyStruct *newValue = malloc (sizeof (struct keyStruct));
+	strncpy(newValue -> key, key, strlen(key));
+	strncpy(newValue -> value, value, strlen(value));
+	HASH_ADD_STR(registeredServers, key, newValue);
+
+	return 0;
+}
 
 /* Look for key in the hashtable */
-char *getValue (char* key) { /* TODO: HANDLE ERRORS. RETURNS VALUE FROM KEY, OTHERWISE NULL OR EMPTY STRING */
+char *getValue (char* key) { 
 
     	struct keyStruct *s;
-
     	HASH_FIND_STR (registeredValues, key, s );  /* s: output pointer */
     
 	return s->value;
 }
 
 
-int insertValue (char* key, char* value) /* TODO: Handle errors */
+/*Insert a new key in the hash table */
+int insertValue (char* key, char* value)
 {
 	struct keyStruct *newValue = malloc (sizeof (struct keyStruct));
 	strncpy(newValue -> key, key, strlen(key));
@@ -63,450 +108,466 @@ int insertValue (char* key, char* value) /* TODO: Handle errors */
 	return 0;
 }
 
-
-
-/*char *peerID;
-int peerPort = 0;
-int globalOpt = 1;*/
-
-
-/*int searchFile (char* fileName)
+/* Delete a key */
+int deleteKey (char* key) 
 {
-    int sock;
-    struct sockaddr_in server;
-    char serverReply[2000];
-    char *serverCode;
-    char request[80];
-    char peerList[2000];
-    char option[10];
-    int fixedOption;
-    int i;
+    	struct keyStruct *s;
 
-
-    //Create socket
-    sock = socket(AF_INET , SOCK_STREAM , 0);
-    if (sock == -1)
-    {
-        printf("*Could not create socket");
-    }
-    //puts("Socket created");
-     
-    server.sin_addr.s_addr = inet_addr("127.0.0.1");
-    server.sin_family = AF_INET;
-    server.sin_port = htons( SERVER_PORT );
- 
-    //Connect to server
-    if (connect(sock , (struct sockaddr *)&server , sizeof(server)) < 0)
-    {
-        perror("*Connection to server failed");
-        return -1;
-    }
-     
-    	printf("Connected to server\n");
-
-	strcpy(request, "SEARCH");
-	strcat(request, " ");
-	strcat(request, fileName);
-
-    	printf("\nThe request that is going to be sent is %s\n", request);
-    	write(sock, request, strlen(request));
-	read (sock , serverReply , sizeof(serverReply));
-
-	strncpy(peerList, serverReply, sizeof(serverReply));
-	//printf("Recieved: %s\n", serverReply);
-	serverCode = strtok(serverReply," "); // The first string is the server reply
-	printf ("Server reply is: %s\n", serverCode);
-
-	if (strcmp(serverCode, "OK") == 0)
+    	HASH_FIND_STR (registeredValues, key, s );  /* s: output pointer */
+    
+	if (s == NULL)
 	{
-		char *aux = strtok(NULL, " ");
-		
-		printf("File found in the following peers: \n");
+		return -1;
+	}
+	else
+	{
+		HASH_DEL(registeredValues, s);
+		free(s);
+		return 0;
+	}
+}
 
-		int count = 1;
-		while (aux != NULL && strlen(aux)>1)
+
+
+int loadConfigFile (char* configFilePath)
+{
+	/* Open file */
+
+	FILE *fp;
+	fp = fopen(configFilePath, "r");
+	char line[512];
+	int count = 0;
+	char strCount[4];	
+
+    	if (fp != NULL)
+    	{
+		printf ("File %s opened\n", configFilePath);
+
+		while (count < MAX_SERVERS)
 		{
-			printf("\t[%i] - %s\n", count, aux);
-			aux = strtok(NULL, " ");
-			count++;
-		}
-
-		printf("Select the peer to download the file from [1 - %i]: ", count - 1);
-
-		// TESTING MODE --> SELECTING FIRST OPTION AUTOMATICALLY 
-		if (testingMode == 1)
-		{
-			fixedOption = 1; //Override peer choice
-		}
-		else
-		{
-			if(fgets (option, 10, stdin) == NULL ) 
-	   		{
-				printf("ERROR: WRONG PEER ID");	
-				return -1;
-			}
-
-			fixedOption = atoi(option);
-			if (fixedOption < 1 || fixedOption > count -1)
+			fgets (line, sizeof(line), fp);
+			if (strlen(line) != 0)
 			{
-				printf("Wrong option\n");
-				return -1;
+				sprintf(strCount, "%d", count);
+				insertServer(strCount, line);
+   				count++;
+				//printf("\t+Adding server number %i, with info: %s\n", count ,line);			
 			}
 		}
-		char *peerTuple;
 
-		strtok(peerList, " "); // Getting rid of the "OK" response
-
-		for (i = 1; i < fixedOption; i++)
-		{
-			strtok(NULL, " ");
-		}		
-
-		peerTuple = strtok(NULL, " ");
-		printf("You have selected option %i, which is peer %s\n", fixedOption, peerTuple);
-		strtok(peerTuple,":");
-		char* connectingPeer = strtok(NULL,":");
-		
-		printf ("Connecting to port %i, requesting file %s...\n",atoi(connectingPeer), fileName);
-		if (obtainFile(atoi(connectingPeer), fileName) < 0)
-		{
-			printf("Error downloading file\n");
-			return -1;
-		}
+		fclose(fp);
+		//printServers();	/* For debug purposes*/
 	}
 
 	else
 	{
-		printf("*Server returned error when searching for file %s\n", fileName);
+		printf("ERROR\n");
+		perror("*Error when opening configuration file %s");
 		return -1;
 	}
 
 	return 0;
-}*/
+}
 
 
-/*int registerFile (char* fileName)
+int getServerFromHash (char* key)
 {
-    int sock;
-    struct sockaddr_in server;
-    char serverReply[2000];
-    char request[80];
-    char port[10];
+	return atoi(key) % 8; /* TODO */
+}
 
 
-    snprintf(port, sizeof( peerPort ) + 1, "%i", peerPort);
+int obtainValueFromPeer(char *key, int destPort)
+{
+	int sock;
+	struct sockaddr_in server;
+	char *request = malloc (1024 * sizeof(char));
+	char *header = malloc(1024 * sizeof(char));
+	char *message = malloc (1024 * sizeof(char));
+    	char *serverReply = malloc(1024 * sizeof(char));
 
-    //Create socket
-    sock = socket(AF_INET , SOCK_STREAM , 0);
-    if (sock == -1)
-    {
-        printf("Could not create socket");
-    }
-    //puts("Socket created");
+
+    	//Create socket
+    	sock = socket(AF_INET , SOCK_STREAM , 0);
+    	if (sock == -1)
+    	{
+        	printf("Could not create socket");
+		return -1;
+    	}
      
-    server.sin_addr.s_addr = inet_addr("127.0.0.1");
-    server.sin_family = AF_INET;
-    server.sin_port = htons( SERVER_PORT );
+    	server.sin_addr.s_addr = inet_addr("127.0.0.1");
+    	server.sin_family = AF_INET;
+    	server.sin_port = htons( destPort );
  
-    //Connect to server
-    if (connect(sock , (struct sockaddr *)&server , sizeof(server)) < 0)
-    {
-        perror("Connection to server failed");
-        return 1;
-    }
+    	//Connect to remote server
+    	if (connect(sock , (struct sockaddr *)&server , sizeof(server)) < 0)
+    	{
+        	perror("connect failed. Error");
+        	return -1;
+    	}
      
-    printf("Connected to server\n");
-    
-	strcpy(request, "REGISTRY");
-	strcat(request, " ");
-	strcat(request, fileName);
-	strcat(request, " ");
-	strcat(request, peerID);
-	strcat(request, ":");
-	strcat(request, port);
+    	printf("Connected to port %i\n", port);
 
-    	printf("\nThe request that is going to be sent is %s\n", request);
-    	write(sock, request, strlen(request));
-	read (sock , serverReply , sizeof(serverReply));
-	printf ("Server reply is: %s\n", serverReply);
+	strncpy(request, "OBT ", 4);
+	strncat(request, key, strlen(key));	
+
+    	printf("Request key %s to peer on port %i...\n", key, port);
+    	write(sock, request, 1024);
+
+	if (read (sock, serverReply , 1024) <= 0)
+	{
+		printf("*Error: Connection with peer lost\n");
+		return -1;
+	}
+
+	strncpy(header, serverReply, 2);
+
+	if (strcmp(header,"OK")==0)
+	{
+		strncpy(message, &serverReply[24], 1000);
+		printf("\n\n--------------\n\n");
+		printf("\t+The value from key %s is: \n\n", key);
+		printf("%s\n", message);
+		printf("\n--------------\n\n");	
+	}
+	else
+	{
+		printf("*Error: Peer returned key not found\n");
+	}
+
+    	close(sock);
+
 	return 0;
-}*/
+}
 
-/*int checkOption (char* optionAux)
+int getCall(char* key)
 {
-	int option = optionAux[0];
+	char *request = malloc(1024 * sizeof(char));
+	char *serverReply = malloc(1024 * sizeof(char));
+	int serverIndex = 0;
+	int sock = 0;
+	char *reply = malloc(1024 * sizeof(char));	
+	char destPort[10];
+ 
+	/* Preparing the GET call request */
+	strncpy(request, "GET ", 4);
+	strncat(request, key, strlen(key));
+	serverIndex = getServerFromHash(key); /* Gets the index of the server that has to store that key */
+	printf("Sending request to server %i\n", serverIndex);
+	sock = serverSockets[serverIndex];
+
+	write(sock, request, 1024);
+	read (sock , serverReply , 1024);
+	strncpy(reply, serverReply, 4);
+	
+	if (strcmp(reply,"OK  ")==0) 
+	{
+		strncpy(destPort, &serverReply[24], 50);
+		if (atoi(destPort) == port)
+		{
+			printf("*Error: The port returned by the server belongs to this peer. This means you are asking for a key you registered\n");
+			return -1;
+		}
+		if (obtainValueFromPeer(key,atoi(destPort)) != 0)
+		{
+			printf("*Error when obtaining the value from the peer\n");
+			return -1;
+		}
+		return 0;
+	}
+	else
+	{
+		printf("*Error when looking for the key on the server\n");
+		return -1;
+	}
+
+
+
+	return 0;
+}
+
+
+int putCall(char* key)
+{
+	char *request = malloc(1024 * sizeof(char));
+	char *serverReply = malloc(1024 * sizeof(char));
+	int serverIndex = 0;
+	int sock = 0;
 	int i;
-	char fileName[60];
-	char* fixedFileName;
+	char auxPort[5];
+
+
+	sprintf(auxPort, "%d", port);
+
+	/* Preparing the Put call request */
+	strncpy(request, "PUT ", 4);
+	strncat(request, key, strlen(key));
+	for (i = 4 + strlen(key); i < 24; i++)
+	{
+		strncat(request, " ", 1);
+	}
+	strncat(request, auxPort, strlen(auxPort));
+
+	serverIndex = getServerFromHash(key);
+	printf("Sending request to server %i: %s\n", serverIndex, request);
+	sock = serverSockets[serverIndex];
+
+	write(sock, request, 1024);
+	read (sock , serverReply , 1024);
+	
+	if (strcmp(serverReply,"OK  ")==0) 
+	{
+		return 0;
+	}
+	else
+	{
+		return -1;
+	}
+}
+
+
+
+
+int deleteCall (char* key)
+{
+	char *request = malloc(1024 * sizeof(char));
+	char *serverReply = malloc(1024 * sizeof(char));
+	int serverIndex = 0;
+	int sock = 0;
+
+ 
+	/* Preparing delete call request */
+	strncpy(request, "DEL ", 4);
+	strncat(request, key, strlen(key));
+	serverIndex = getServerFromHash(key);
+	printf("Sending request to server %i: %s\n", serverIndex, request);
+	sock = serverSockets[serverIndex];
+
+	write(sock, request, 1024);
+	read (sock , serverReply , 1024);
+	
+	if (strcmp(serverReply,"OK  ")==0) 
+	{
+		return 0;
+	}
+	else
+	{
+		return -1;
+	}
+}
+
+
+int selectOptionTestMode (int option, char *auxLowerRange, char *auxUpperRange)
+{
+	int lowerRange = atoi (auxLowerRange);
+	int upperRange = atoi (auxUpperRange);
+	int i;
+	char key[20];
+	char *operation;
+	clock_t begin, end;
+	double time_spent;
+
 
 	switch(option)
 	{
-	   case '1' :
+	   	case '1' :
+			operation = "PUT";
+		break;
+		
+		case '2' :
+			operation = "GET";
+		break;
+
+		case '3' :
+			operation = "DELETE";
+		break;
+
+		default:
+			operation = "UNKNOWN";
+	}
+	printf("\n\n -- Testing Mode --\n\n");
+	printf("Range keys: %i - %i \n", lowerRange, upperRange);
+
+	if (upperRange <= lowerRange)	
+	{
+		printf("*Error: Upper range can not be lower than the lower range\n");
+		return -1;
+	}
 	
-		globalOpt = 2;
-		showPromptMessage(globalOpt);
 
-		//printf("Register a file\n" );
-		//globalOpt = 2;
-		//printf("Type in the file you want to register: "); // OPTION 2
+	begin = clock();
+	for (i = lowerRange; i < upperRange; i++)
+	{
+		sprintf(key, "%d", i);
+		selectOption(option, key);
+	}
+	end = clock();
+	time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
+	printf("\n************************************\n");
+	printf("******** PERFORMANCE STATS *********\n");
+	printf("************************************\n\n");
 
-		//Ask the user for the file to search
-		if(fgets (fileName, 60, stdin) == NULL ) 
+	printf("+Type of operation: %s\n", operation);
+	printf("+Number of keys: %i\n", upperRange - lowerRange);
+	printf("+Total time: %f seconds\n", time_spent);
+	printf("\n************************************\n\n");
+	printf("Please wait. The prompt will reappear shortly...\n");
+
+	sleep(5);
+	
+	return 0;
+}
+
+
+int selectOption(int option, char *overrideKey)
+{
+	
+	char key[20];
+	char value[1000];
+	char *fixedKey;
+	char *fixedValue;
+
+
+	switch(option)
+	{
+	   case '1' :  /* PUT OPTION */
+	
+		printf("Register a new key\n" );
+		printf("Type in the key you want to register: \n");
+
+		if (testingMode)
 		{
-			printf("ERROR: WRONG FILE NAME");	
-			return -1;
+			fixedKey = overrideKey;
+			fixedValue = "test";
 		}
-
-		//In order to get rid of that annoying '\n' escape char
-		fixedFileName = strtok(fileName, "\n"); 
-	
-		// Testing mode 
-		if (testingMode == 1)
+		else 
 		{
-			for (i = 0; i < seqRuns; i++)
+			if(fgets (key, 20, stdin) == NULL ) 
 			{
-				printf("\n\nVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV\n");
-				printf("[Execution number %i]:",i+1);
-				if (registerFile(fixedFileName) == 0)
-				{
-					printf ("File %s registered successfully\n", fileName);
-				}
-				else
-				{
-					printf("ERROR REGISTERING FILE\n");
-				}
+				perror("Error when saving the key");	
+				return -1;
 			}
+			//Ask for the new key and save it
+
+			/*In order to get rid of that annoying '\n' escape char*/
+			fixedKey = strtok(key, "\n"); 
+			printf("Now type the value for that key: \n");
+
+			//Ask for value and save it
+			if(fgets (value, 1000, stdin) == NULL ) 
+			{
+				perror("Error when saving the value");	
+				return -1;
+			}
+			/*In order to get rid of that annoying '\n' escape char*/
+			fixedValue = strtok(value, "\n"); 
+	
+		}
+		
+
+
+		printf ("Registering key %s...\n", fixedKey);
+		if (putCall(fixedKey) < 0)
+		{
+			printf("*Error: Key %s could not be registered into the server\n", fixedKey);
+			return -1;
 		}
 		else
 		{
-			if (registerFile(fixedFileName) == 0)
+			if (insertValue(fixedKey, fixedValue) < 0)
 			{
-				printf ("File %s registered successfully\n", fileName);
+				printf("*Error: Key could not be created locally\n");
+				return -1;
 			}
-			else
-			{
-				printf("ERROR REGISTERING FILE\n");
-			}
+			printf("Key %s registered sucessfully\n", fixedKey);
 		}
-	      	break;
+		break;
 
-	   case '2' :
+	   case '2' : /* PUT OPTION */
 
 		globalOpt = 3;
-		showPromptMessage(globalOpt);
+		//showPromptMessage(globalOpt);
 
-		//printf("Search for a file\n");
-		//globalOpt = 3;
-		//printf("Type in the file you want to search: "); //OPTION 3
+		printf("Search for a key\n" );
+		//globalOpt = 2;
+		printf("Type in the key you want to search: \n");
 
-		//Ask the user for the file to search
-		if(fgets (fileName, 60, stdin) == NULL ) 
+		if (testingMode)
 		{
-			printf("*Error: Wrong file name");	
-			return -1;
-		}
-
-		//Next line is to get rid of that annoying '\n' escape char
-		fixedFileName = strtok(fileName, "\n"); 
-
-		if (testingMode == 1)
-		{
-			for (i = 0; i < seqRuns; i++)
-			{
-				printf("\n\nVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV\n");
-				printf("[Execution number %i]:",i+1);
-				if (searchFile(fixedFileName) == 0)
-				{
-					printf("Sucess in search call\n");
-				}
-				else
-				{
-					printf("*Error when searching for the file\n");
-				}
-			}
+			fixedKey = overrideKey;
+			
 		}
 		else
 		{
-			if (searchFile(fixedFileName) == 0)
+			//Ask for the new key and save it
+			if(fgets (key, 20, stdin) == NULL ) 
 			{
-				printf("Sucess in search call\n");
+				perror("Error when saving the key");	
+				return -1;
 			}
-			else
-			{
-				printf("*Error when searching for the file\n");
-			}
+			/*In order to get rid of that annoying '\n' escape char*/
+			fixedKey = strtok(key, "\n"); 
+	
 		}
+
+		if (getCall(fixedKey) < 0)
+		{
+			printf("*Error when obtaining the value for key %s\n", fixedKey);
+			return -1;
+		}
+
+		break;
+
+
+	   case '3' :   /* DELETE OPTION */
+	
+
+		printf("Delete a key\n" );
+		printf("Type in the key you want to delete: \n");
+
+		if (testingMode)
+		{
+			fixedKey = overrideKey;
+		}
+		else
+		{
+			//Ask for the new key and save it
+			if(fgets (key, 20, stdin) == NULL ) 
+			{
+				perror("Error when saving the key");	
+				return -1;
+			}
+			/*In order to get rid of that annoying '\n' escape char*/
+			fixedKey = strtok(key, "\n"); 
+		}
+		
+		
+		if (getValue(fixedKey) == NULL)
+		{
+			printf("*Error: You can not delete keys from other peers\n");
+		}
+		if (deleteCall(fixedKey) < 0)
+		{
+			printf("*Error: Key %s could not be deleted\n", fixedKey);
+			return -1;
+		}
+		else
+		{
+			deleteKey(fixedKey); /*Delete local key*/
+			printf("The key %s was sucessfully deleted\n", fixedKey);
+		}
+
+		break;
+
+	   case '4' :
+
+		printLocalKeys();
+		
 		break;
 
 	   default :
 	      printf("Invalid option\n" );
 	}
- 
-   return 0;	
-}*/
-
-
-
-/*int sendFile (int sock, char* fileName)
-{
-    char origin[200];
-    strcpy(origin, "./shared_folder/");
-    strcat(origin, fileName);
-
-    char buffer[256];
-    
-    FILE *fp;
-    fp=fopen(origin, "r");
-    int bytes_read = -1;
-    if (fp != NULL)
-    {
-	printf ("File %s opened\n", fileName);
-	while ( (bytes_read = fread (buffer, 1, sizeof (buffer), fp)) > 0)
-	{
-		write(sock,buffer, bytes_read);
-	}
-
-	fclose (fp);	
-	close (sock);
-	return 0;
-    }
-    else 
-	{
-		perror ("Error opening file");
-		close (sock);
-		return -1;
-	}
-}*/
-
-
-void showPromptMessage (int option)
-{
-	/* This function triggers when the thread shows info about incoming connections into the terminal
-	 * By doing this the user will have prompt message visible again instead of getting lost because of thread asynchronized messages
-	 */
-
-	switch(option)
-	{
-		case 1 :
-			//printf ("\nThis is peer %s. Available options:\n",peerID);
-			printf ("\t[1] - Register a file to the index server\n");
-			printf ("\t[2] - Obtain a file from another peer\n");
-			printf (">>Select option number below\n");
-		break;
-
-		case 2 :
-			printf ("\nOption 2: Register a file.\n");
-			printf (">>Type below the file you want to register\n");
-		break;
-
-		case 3 :
-			printf("\nOption 3: Search for a file\n");
-			printf(">>Type below the file you want to search\n"); 
-		break;
-
-		default :
-			printf("\n*Error: Bad prompt code\n"); 
-	}
-}
-
-/* Obtains a file from a peer (Peer port is being used at this stage)*/
-/*int obtainFile (int port, char* fileName)
-{
-    int sock;
-    struct sockaddr_in server;
-   
-    char request[80];  
-    char destination[200];
-    strcpy(destination, "./shared_folder/");
-    strcat(destination, fileName);
-
-
-    //Create socket
-    sock = socket(AF_INET , SOCK_STREAM , 0);
-    if (sock == -1)
-    {
-        printf("Could not create socket");
 	return -1;
-    }
-    //puts("Socket created");
-     
-    server.sin_addr.s_addr = inet_addr("127.0.0.1");
-    server.sin_family = AF_INET;
-    server.sin_port = htons( port  );
- 
-    //Connect to remote server
-    if (connect(sock , (struct sockaddr *)&server , sizeof(server)) < 0)
-    {
-        perror("connect failed. Error");
-        return -1;
-    }
-     
-    printf("Connected to port %i\n", port);
-
-	strcpy(request, "OBTAIN");
-	strcat(request, " ");
-	strcat(request, fileName);
-	strcat(request, " ");
-
-    	printf("\n Requesting file %s to peer in port %i\n", fileName, port);
-    	write(sock, request, strlen(request));
-	
-    	char buffer[256];
-	char bufferAux[256];
-	int bytes_read = -1;
-	bytes_read = read (sock , buffer , sizeof(buffer));
-	if (bytes_read == 0)
-	{
-		printf("Error. The file coudln't be recieved\n");
-		close(sock);
-		return -1;
-	}
-
-	strncpy(bufferAux,buffer,bytes_read - 1);
-
-	FILE *fp;
-	fp=fopen(destination, "w");
-
-    if (fp != NULL)
-    {
-	printf ("File %s opened\n", fileName);
-	
-	while( (bytes_read) > 0 )
-	{
-		fwrite ( buffer, 1, bytes_read, fp);
-		bytes_read = read (sock , buffer , sizeof(buffer));
-	}
-	
-	printf("File %s sucessfully downloaded\n", fileName); 
-	printf("VVVV FILE CONTENT (FIRST 256 BYTES) VVVV\n");
-	printf("%s\n\n", bufferAux);
-	fclose (fp);
-    }
-    else 
-	{
-		perror ("Error opening file");
-		close(sock);
-		return -1;
-	}
-     
-    	close(sock);
-	return 0;
-}*/
-
-int loadLocalData ()
-{
-	return 0;
-}
-
-int loadConfigFile (char* configFilePath)
-{
-	return 0;
-}
-
-
-void selectOption()
-{
-
 }
 
 
@@ -518,9 +579,9 @@ void *connection_handler(void *socket_desc)
 {
 	int sock = *(int*)socket_desc;
 	char *requestReceived = malloc(1024 * sizeof(char));
-	char *header = malloc(4 * sizeof(char));
-	char *key = malloc(20 * sizeof(char));
-	char *message = malloc (1000 * sizeof(char));
+	char *header = malloc(1024 * sizeof(char));
+	char *key = malloc(1024 * sizeof(char));
+	char *message = malloc (1024 * sizeof(char));
 
 	char *serverReply = malloc (1024 * sizeof(char));
 	     
@@ -530,53 +591,45 @@ void *connection_handler(void *socket_desc)
 	strncpy(header, requestReceived, 4);
 	strncpy(key, &requestReceived[4], 20);
 
-	//message = strtok(request_received," ");
 
 	//The only call that the peer can recieve is an obtain ("OBT") call. Otherwise error
 
-	if (strcmp(header,"OBT")==0) /* Check for errors and exceptions */
+	if (strcmp(header,"OBT ")==0) /* Check for errors and exceptions */
 	{	
 		printf("+Obtain value from key %s\n", key);
-
-		/* TODO: Get Value from key */
 		
 		message = getValue(key);
 
 		if (message == NULL)
 		{
 			printf("*Error: Key %s not found\n", key);
-			strncpy("ERR ", serverReply, 4);
-			strncpy("KEY_NOT_FOUND ", &serverReply[24], 14); /* We skip the key part of the message */
+			strncpy(serverReply, "ERR ", 4);
 		}
-		else
+		else 
 		{
-			strncpy("OK  ", serverReply, 4);
-			strncpy(message, &serverReply[24], strlen(message)); /* We skip the key part of the message */	
+			strncpy(serverReply, "OK  ", 4);
+			strncat(serverReply, "                    ", 20);
+			strncat(serverReply, message, strlen(message)); /* We skip the key part of the message */	
 		}
 
-		write(sock, serverReply, sizeof(serverReply)); /* We send the result back to the peer who made the request */
-
-		//showPromptMessage(globalOpt);
+		write(sock, serverReply, strlen(serverReply)); /* We send the result back to the peer who made the request */
 	}
 
 	else
 	{
 		printf("*Error: Bad request\n");
 		strncpy("ERR ", serverReply, 4);
-		strncpy("BAD_REQUEST ", &serverReply[24], 12);
+		//strncpy("BAD_REQUEST ", &serverReply[24], 12);
 		write(sock, serverReply, sizeof(serverReply));
 	}
 
-    //Free the socket pointer
-    free(socket_desc);
-    //showPromptMessage(globalOpt);
     return (void *) 0;
 }
 
 
 void *incoming_connections_handler (void* data)
 {
-    //printf ("+Initializing incoming connection handler...\n");
+    printf ("\t+Initializing incoming connection handler...\n");
      
     int IN_socket_desc, IN_new_socket, c, *IN_new_sock;
     struct sockaddr_in IN_server, client;
@@ -593,7 +646,7 @@ void *incoming_connections_handler (void* data)
     //Prepare the sockaddr_in structure
     IN_server.sin_family = AF_INET;
     IN_server.sin_addr.s_addr = INADDR_ANY;
-    IN_server.sin_port = htons( port ); /*TODO: Select the right port */
+    IN_server.sin_port = htons( port );
      
     //Bind
     if( bind(IN_socket_desc,(struct sockaddr *) &IN_server , sizeof(IN_server)) < 0)
@@ -605,9 +658,8 @@ void *incoming_connections_handler (void* data)
     //Listen
     listen(IN_socket_desc , 1000); // The peer can handle 1000 simulteaneous connections
      
-    //Accept and incoming connection
-    //printf("+Waiting for incoming connections in port %i...\n", peerPort);
-    //showPromptMessage (globalOpt);
+    //Accept an incoming connection
+    printf("\t+Waiting for incoming connections in port %i...\n", port);
     c = sizeof(struct sockaddr_in);
 	
     while( (IN_new_socket = accept(IN_socket_desc, (struct sockaddr *)&client, (socklen_t*)&c)) )
@@ -626,7 +678,6 @@ void *incoming_connections_handler (void* data)
          
         //Now join the thread , so that we dont terminate before the thread
         pthread_join( sniffer_thread , NULL);
-        //puts("Handler assigned");
     }
      
     if (IN_new_socket<0)
@@ -638,48 +689,109 @@ void *incoming_connections_handler (void* data)
     return (void *) 0;
 }
 
+int connectToSingleServer(int index)
+{
+	int sock;
+    	struct sockaddr_in server;
+	char *ip = "127.0.0.1";
+	int port = 0;
+	char strIndex[50];
+	char *actualServer;
+
+
+	sprintf(strIndex, "%d", index);
+	actualServer = getServer(strIndex);
+	strtok(actualServer, ":");
+	port = atoi(strtok(NULL, " "));
+
+
+	//Create socket
+	sock = socket(AF_INET , SOCK_STREAM , 0);
+    	if (sock == -1)
+	{
+		printf("*Could not create socket");
+   	}
+	     
+	server.sin_addr.s_addr = inet_addr(ip);
+	server.sin_family = AF_INET;
+	server.sin_port = htons( port );
+	 
+	//Connect to server
+	if (connect(sock , (struct sockaddr *)&server , sizeof(server)) < 0)
+	{
+		perror("*Connection to server failed");
+		return -1;
+	}
+	else
+	{
+		serverSockets[index] = sock;
+	}
+
+	return 0;
+}
+
+/* Connects to all servers at startup and keeps the connection open. This way we save the cost of creating and destroying threads and connections */
+int connectToServers()
+{
+	int i;
+	int connectedToAll = 0;
+
+	for (i = 0; i < MAX_SERVERS ;i++)
+	{
+		printf("\t+Connecting to server number %i... ", i+1);
+		if (connectToSingleServer(i) == 0) 
+		{
+			printf("OK\n");
+		}
+		else
+		{
+			connectedToAll = -1;
+			printf("*ERROR*\n");
+		}
+	}
+	return connectedToAll;
+}
+
 
 
 int main(int argc , char *argv[])
 {
 
+	char auxOption[10];
+	int option;  
 	int res = 0;
+	char lowerRange[20];
+	char upperRange[20];
+
 
 	/* INITIALIZATION */
 
-	if (argc < 2 || argc > 3)
+	srand(time(NULL));
+
+	if (argc <= 2 || argc > 4)
 	{
 		printf("Usage: %s PEER_PORT CONFIG_FILE_PATH [-t]\n", argv[0]);
 		return 0;
 	}
-	
+
 	port = atoi(argv[1]);
 	char* configFile = argv[2];
 
-	/* TODO: Check if we are in testing mode */
 
 	printf("+Initializing peer...\n");
-	printf("\t+Loading config file... ");
+	printf("+Loading config file... ");
 	res = loadConfigFile(configFile);
 	if (res < 0)
 	{
 		printf("ERROR\n");
 		return -1;	
 	}
-	else
-	{
-		printf("OK\n");
-	}
 
-	printf("\t+Loading local file data... ");
-	
-	if (loadLocalData() < 0)
+	if(connectToServers() < 0)
 	{
-		printf("ERROR\n");
-	}
-	else
-	{
-		printf("OK\n");
+		printf("Connecting to servers... ERROR\n");
+		printf("Could not connect to all 8 servers. Aborting...\n");
+		return -1;
 	}
 
 	printf("\t+Setting up listener... ");
@@ -692,94 +804,45 @@ int main(int argc , char *argv[])
 		return -1;
 	}
 
-	while(1)
-	{
-		printf("Peer ready\n");
-		selectOption();
-	}
-    	
-	return 0;
-}
-
-
-
-
-
-
-/*********************/
-    	/*char option[10];
-	globalOpt = 1;
-	clock_t begin, end;
-	double time_spent;
-
-    	// INITIALIZATION 
-
-	if (argc < 3 || argc == 4 || argc > 5)
-	{
-		printf("Usage: %s PEER_ID PORT [-t SEQUENTIAL_RUNS]\n", argv[0]);
-		return 0;
-	}
-
-	peerID = argv[1];
-	peerPort = atoi(argv[2]);
-    
-
-	if (argc == 5 && (strcmp(argv[3], "-t") == 0))
+	if (argc == 4 && (strcmp(argv[3], "-t") == 0))
 	{
 		testingMode = 1;
-		seqRuns = atoi(argv[4]);
-		printf ("\n\t************************\n");
+		printf ("\n\n\n\t************************\n");
 		printf ("\t***** TESTING MODE *****\n");
 		printf ("\t************************\n\n");
 	}
 
-	pthread_t incoming_connections_thread;
-		 
-	if( pthread_create( &incoming_connections_thread , NULL ,  incoming_connections_handler , NULL ) < 0)
+	while(1)
 	{
-		perror("Could not create thread");
-		return 1;
-	}
-         
-	//Now join the thread, so that we dont terminate before the thread
-	//pthread_join( incoming_connections_thread , NULL);
-	//puts("Handler assigned");
-    
+		//globalOpt = 1;
 
-   	while(1)
-    	{
-		globalOpt = 1;
-		showPromptMessage(globalOpt);
-
-		//printf ("Peer initialized. Available options:\n");
-		printf("\t[1] - Register a file to the index server\n");
-		printf("\t[2] - Search for a file\n");
+		printf ("Peer initialized. Available options:\n");
+		printf("\t[1] - Register a new key (PUT call)\n");
+		printf("\t[2] - Search for a key (GET call)\n");
+		printf("\t[3] - Delete a Key\n");
+		printf("\t[4] - Show local keys\n");
 	
 		printf ("\n**SELECT OPTION NUMBER:");
+		
 
-		fgets(option, sizeof(option), stdin);
-
-		if (testingMode == 1)
+		fgets(auxOption, sizeof(auxOption), stdin);
+		option = auxOption[0];
+		if (testingMode == 1 && option != '4')
 		{
-			begin = clock();
-			checkOption(option);
-			end = clock();
-			time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
-
-			printf("\n************************************\n");
-			printf("******** PERFORMANCE STATS *********\n");
-			printf("************************************\n\n");
-
-			printf("+Number of executions: %i\n", seqRuns);
-			printf("+Total time: %f seconds\n", time_spent);
-			printf("\n************************************\n\n");
-			sleep(2); // Just to show the results before showing the prompt again
-
+			printf("Select the range of keys to perform this operation\n");
+			printf("Lower range: ");
+			fgets(lowerRange, sizeof(lowerRange), stdin);
+			printf("Upper range: ");
+			fgets(upperRange, sizeof(upperRange), stdin);
+			selectOptionTestMode(option, lowerRange, upperRange);
 		}
 		else
 		{
-			checkOption(option);
+			selectOption(option, NULL);
 		}
-    	} */  
 
-
+		
+	}
+    	
+	return 0;
+}
